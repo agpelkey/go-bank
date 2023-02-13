@@ -5,19 +5,20 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/mux"
 )
 
 type APIServer struct {
 	listneAddr string
-	store Storage
+	store      Storage
 }
 
 func NewAPIServer(listenAddr string, store Storage) *APIServer {
 	return &APIServer{
 		listneAddr: listenAddr,
-		store: store,
+		store:      store,
 	}
 
 }
@@ -27,7 +28,7 @@ func (s *APIServer) Run() {
 
 	router.HandleFunc("/account", makeHTTPHandleFunc(s.handleAccount))
 
-	router.HandleFunc("/account/{id}", makeHTTPHandleFunc(s.handleGetAccount))
+	router.HandleFunc("/account/{id}", makeHTTPHandleFunc(s.handleGetAccountByID))
 
 	log.Println("JSON API Server Running on port: ", s.listneAddr)
 
@@ -50,17 +51,47 @@ func (s *APIServer) handleAccount(w http.ResponseWriter, r *http.Request) error 
 	return fmt.Errorf("Method not allowed %s", r.Method)
 }
 
+// GET /account
 func (s *APIServer) handleGetAccount(w http.ResponseWriter, r *http.Request) error {
-	id := mux.Vars(r)["id"]
+	accounts, err := s.store.GetAccounts()
+	if err != nil {
+		return err
+	}
 
-	// db.get(id) for the future
-	fmt.Println(id)
+	return WriteJSON(w, http.StatusOK, accounts)
+}
 
-	return WriteJSON(w, http.StatusOK, Account{})
+func (s *APIServer) handleGetAccountByID(w http.ResponseWriter, r *http.Request) error {
+	idStr := mux.Vars(r)["id"]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		return fmt.Errorf("Invalid ID given %s", idStr)
+	}
+
+	account, err := s.store.GetAccountByID(id)
+	if err != nil {
+		return err
+	}
+
+	return WriteJSON(w, http.StatusOK, account)
 }
 
 func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) error {
-	return nil
+	createAccountReq := new(CeateAccountRequest)
+	if err := json.NewDecoder(r.Body).Decode(createAccountReq); err != nil {
+		return err
+	}
+
+	account := NewAccount(createAccountReq.FirstName, createAccountReq.LastName)
+	if err := s.store.CreateAccount(account); err != nil {
+		return err
+	}
+
+	if err := s.store.CreateAccount(account); err != nil {
+		return err
+	}
+
+	return WriteJSON(w, http.StatusOK, account)
 }
 
 func (s *APIServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) error {
