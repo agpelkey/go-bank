@@ -28,6 +28,7 @@ func NewAPIServer(listenAddr string, store Storage) *APIServer {
 func (s *APIServer) Run() {
 	router := mux.NewRouter()
 
+	router.HandleFunc("/login", makeHTTPHandleFunc(s.handleLogin))
 	router.HandleFunc("/account", makeHTTPHandleFunc(s.handleAccount))
 	router.HandleFunc("/account/{id}", withJWTAuth(makeHTTPHandleFunc(s.handleGetAccountByID), s.store))
 	router.HandleFunc("/transfer", makeHTTPHandleFunc(s.handleTransfer))
@@ -36,16 +37,45 @@ func (s *APIServer) Run() {
 
 	http.ListenAndServe(s.listneAddr, router)
 }
+func (s *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) error {
+	if r.Method != "POST" {
+		return fmt.Errorf("method now allowed %s", r.Method)
+	}
+
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return err
+	}
+
+	acc, err := s.store.GetAccountByNumber(int(req.Number))
+	if err != nil {
+		return err
+	}
+
+	if !acc.ValidatePasword(req.Password) {
+		return fmt.Errorf("not authenticated")
+	}
+
+	token, err := createJWT(acc)
+	if err != nil {
+		return err
+	}
+
+	resp := LoginResponse{
+		Token:  token,
+		Number: acc.Number,
+	}
+	return WriteJSON(w, http.StatusOK, resp)
+}
 
 func (s *APIServer) handleAccount(w http.ResponseWriter, r *http.Request) error {
 	if r.Method == "GET" {
 		return s.handleGetAccount(w, r)
 	}
-
 	if r.Method == "POST" {
 		return s.handleCreateAccount(w, r)
 	}
-	return fmt.Errorf("Method not allowed %s", r.Method)
+	return fmt.Errorf("method not allowed %s", r.Method)
 }
 
 // GET /account
@@ -77,27 +107,19 @@ func (s *APIServer) handleGetAccountByID(w http.ResponseWriter, r *http.Request)
 		return s.handleDeleteAccount(w, r)
 	}
 
-	return fmt.Errorf("Method now allowed %s", r.Method)
+	return fmt.Errorf("method now allowed %s", r.Method)
 }
 
 func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) error {
-	createAccountReq := new(CeateAccountRequest)
-	if err := json.NewDecoder(r.Body).Decode(createAccountReq); err != nil {
+	req := new(CeateAccountRequest)
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
 		return err
 	}
 
-	account := NewAccount(createAccountReq.FirstName, createAccountReq.LastName)
-	if err := s.store.CreateAccount(account); err != nil {
-		return err
-	}
-
-	tokenString, err := createJWT(account)
+	account, err := NewAccount(req.FirstName, req.LastName, req.Password)
 	if err != nil {
 		return err
 	}
-
-	fmt.Println("JWT token: ", tokenString)
-
 	if err := s.store.CreateAccount(account); err != nil {
 		return err
 	}
@@ -196,7 +218,7 @@ func validateJWT(tokenString string) (*jwt.Token, error) {
 
 	return jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 
 		return []byte(secret), nil
@@ -223,7 +245,7 @@ func getID(r *http.Request) (int, error) {
 	idStr := mux.Vars(r)["id"]
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		return id, fmt.Errorf("invalid id is given %s", id)
+		return id, fmt.Errorf("invalid id is given %v", id)
 	}
 
 	return id, nil
